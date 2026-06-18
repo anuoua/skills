@@ -1,0 +1,23 @@
+{
+  "name": "anuoua-skills",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release": "changeset publish",
+    "test": "pnpm -r --stream test",
+    "typecheck": "pnpm -r --stream run typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "keywords": [],
+  "author": "anuoua",
+  "license": "MIT",
+  "packageManager": "pnpm@10.30.3",
+  "devDependencies": {
+    "@changesets/cli": "^2.31.0",
+    "prettier": "^3.8.4",
+    "typescript": "^6.0.3"
+  }
+}
