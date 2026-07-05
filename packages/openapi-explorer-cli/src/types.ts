@@ -15,6 +15,8 @@ export interface OpenAPISpec {
   host?: string;
   basePath?: string;
   schemes?: string[];
+  consumes?: string[];
+  produces?: string[];
 }
 
 export interface EndpointSummary {

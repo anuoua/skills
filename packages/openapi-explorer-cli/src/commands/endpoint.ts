@@ -25,10 +25,16 @@ export async function cmdEndpoint(
   }
 
   const paramNames = getPathParams(path);
+  const opParams: any[] = op.parameters || [];
+  // Swagger 2.0 models the request body as a parameter with in:"body" + schema,
+  // separate from the path/query/header parameters.
+  const bodyParam = opParams.find((p: any) => p.in === "body");
+  const nonBodyParams = opParams.filter((p: any) => p.in !== "body");
+
   const mergedParams = [
     ...paramNames.map(
       (n) =>
-        (op.parameters || []).find((p: any) => p.name === n) || {
+        nonBodyParams.find((p: any) => p.name === n) || {
           name: n,
           in: "path",
           required: true,
@@ -36,8 +42,61 @@ export async function cmdEndpoint(
           schema: { type: "string" },
         },
     ),
-    ...(op.parameters || []).filter((p: any) => !paramNames.includes(p.name)),
+    ...nonBodyParams.filter((p: any) => !paramNames.includes(p.name)),
   ];
+
+  // Resolve $refs only under --full; otherwise leave schemas (with $ref) as-is.
+  const resolve = (schema: any): any =>
+    full && schema ? deepResolve(schema, spec) : schema;
+
+  // Request body: OpenAPI 3 requestBody wins; otherwise build one from a
+  // Swagger 2.0 body parameter so its schema renders in the Request Body
+  // section (instead of "object" in the parameters table).
+  let requestBody: any;
+  if (op.requestBody) {
+    requestBody = {
+      description: op.requestBody.description,
+      required: op.requestBody.required,
+      content: Object.fromEntries(
+        Object.entries(op.requestBody.content || {}).map(
+          ([ct, mt]: [string, any]) => [ct, { schema: resolve(mt.schema) }],
+        ),
+      ),
+    };
+  } else if (bodyParam) {
+    const ct =
+      (op.consumes || spec.consumes || ["application/json"])[0] ||
+      "application/json";
+    requestBody = {
+      description: bodyParam.description,
+      required: bodyParam.required,
+      content: { [ct]: { schema: resolve(bodyParam.schema) } },
+    };
+  }
+
+  // Responses: OpenAPI 3 uses response.content; Swagger 2.0 uses a bare
+  // response.schema + the operation's/root produces list.
+  const produces = op.produces || spec.produces || ["application/json"];
+  let responses: any;
+  if (op.responses) {
+    responses = Object.fromEntries(
+      Object.entries(op.responses).map(([code, resp]: [string, any]) => {
+        let content: any;
+        if (resp.content) {
+          content = Object.fromEntries(
+            Object.entries(resp.content).map(([ct, mt]: [string, any]) => [
+              ct,
+              { schema: resolve(mt.schema) },
+            ]),
+          );
+        } else if (resp.schema) {
+          const ct = produces[0] || "application/json";
+          content = { [ct]: { schema: resolve(resp.schema) } };
+        }
+        return [code, { description: resp.description, content }];
+      }),
+    );
+  }
 
   const ep: FormattedEndpoint = {
     path,
@@ -47,56 +106,9 @@ export async function cmdEndpoint(
     operationId: op.operationId,
     tags: op.tags || [],
     deprecated: op.deprecated || false,
-    parameters: full
-      ? mergedParams.map((p: any) => ({
-          ...p,
-          schema: p.schema ? deepResolve(p.schema, spec) : p.schema,
-        }))
-      : mergedParams,
-    requestBody: op.requestBody
-      ? {
-          description: op.requestBody.description,
-          required: op.requestBody.required,
-          content: Object.fromEntries(
-            Object.entries(op.requestBody.content).map(
-              ([ct, mt]: [string, any]) => [
-                ct,
-                {
-                  schema:
-                    full && mt.schema
-                      ? deepResolve(mt.schema, spec)
-                      : mt.schema,
-                },
-              ],
-            ),
-          ),
-        }
-      : undefined,
-    responses: op.responses
-      ? Object.fromEntries(
-          Object.entries(op.responses).map(([code, resp]: [string, any]) => [
-            code,
-            {
-              description: resp.description,
-              content: resp.content
-                ? Object.fromEntries(
-                    Object.entries(resp.content).map(
-                      ([ct, mt]: [string, any]) => [
-                        ct,
-                        {
-                          schema:
-                            full && mt.schema
-                              ? deepResolve(mt.schema, spec)
-                              : mt.schema,
-                        },
-                      ],
-                    ),
-                  )
-                : undefined,
-            },
-          ]),
-        )
-      : undefined,
+    parameters: mergedParams.map((p: any) => ({ ...p, schema: resolve(p.schema) })),
+    requestBody,
+    responses,
     security: op.security,
   };
 
