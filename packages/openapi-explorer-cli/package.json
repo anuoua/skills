@@ -1,0 +1,31 @@
+{
+  "name": "@askills/openapi-explorer-cli",
+  "version": "0.0.1",
+  "description": "CLI for progressive exploration of OpenAPI/Swagger API documentation",
+  "type": "module",
+  "license": "MIT",
+  "author": "anuoua",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/anuoua/skills.git",
+    "directory": "packages/openapi-explorer-cli"
+  },
+  "bin": {
+    "openapi-explorer": "src/main.ts"
+  },
+  "scripts": {
+    "start": "node src/main.ts",
+    "test": "node --test test/*.test.ts",
+    "test:watch": "node --test --watch test/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0"
+  }
+}
