@@ -1,6 +1,6 @@
 {
   "name": "@askills/agent-chat-cli",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Multi-agent chat room CLI with a structured turn-based speaking protocol",
   "type": "module",
   "license": "MIT",
