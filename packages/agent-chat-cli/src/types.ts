@@ -32,24 +32,11 @@ export interface RoundState {
   excludedAgentNames: string[];
 }
 
-export interface RoomInfo {
-  roomName: string;
-  port: number;
-  host: string | null;
-  agents: string[];
-  online: number;
-  roundNumber: number;
-  phase: string;
-}
-
 export interface ServerConfig {
   roomName: string;
   port: number;
-  dbPath: string;
-  markerDir?: string;
-}
-
-export interface EventFilter {
-  types: string[];
-  agentName: string;
+  /** Directory where the message file (`<room>.<port>.json`) is written. */
+  dir: string;
+  /** Host established at serve time (skips a separate join). */
+  host?: { name: string; description?: string; session: string };
 }

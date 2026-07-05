@@ -1,9 +1,7 @@
 import express from "express";
-import { Low } from "lowdb";
-import { JSONFile } from "lowdb/node";
 import { randomUUID } from "node:crypto";
-import { writeFileSync, mkdirSync, existsSync, unlinkSync } from "node:fs";
-import { dirname } from "node:path";
+import { writeFileSync, mkdirSync, existsSync, renameSync } from "node:fs";
+import { join } from "node:path";
 import type {
   Message,
   AgentState,
@@ -11,42 +9,27 @@ import type {
   RoundState,
   ServerConfig,
 } from "./types.ts";
-import { markerFileName, getRoomsDir } from "./room.ts";
+import { roomFileName } from "./room.ts";
 
 interface PendingListener {
   agentName: string;
   events: string[];
   res: express.Response;
-  timer: NodeJS.Timeout;
-}
-
-interface RosterEntry {
-  description?: string;
-  isHost: boolean;
-}
-
-interface DbShape {
-  messages: Message[];
-  roster: Record<string, RosterEntry>;
 }
 
 const MAX_QUEUE_SIZE = 1000;
-const LISTEN_LONG_POLL_MS = 60000;
 
 export function createChatRoomServer(config: ServerConfig) {
-  const { roomName, port, dbPath } = config;
-  const markerDir = config.markerDir ?? getRoomsDir();
-
-  const adapter = new JSONFile<DbShape>(dbPath);
-  const db = new Low(adapter, { messages: [], roster: {} });
+  const { roomName, port, dir, host } = config;
 
   const agents = new Map<string, AgentState>();
+  const messages: Message[] = [];
   const eventQueues = new Map<string, ChatEvent[]>();
   const pendingListeners: PendingListener[] = [];
   const sessions = new Map<string, string>();
   let isKilled = false;
   let actualPort = port;
-  let markerPath = "";
+  let filePath = "";
 
   const roundState: RoundState = {
     roundNumber: 0,
@@ -106,7 +89,6 @@ export function createChatRoomServer(config: ServerConfig) {
             ? queue.filter((e) => !pl.events.includes(e.type))
             : [];
         eventQueues.set(pl.agentName, remaining);
-        clearTimeout(pl.timer);
         pl.res.json(matched);
         pendingListeners.splice(i, 1);
       }
@@ -115,31 +97,25 @@ export function createChatRoomServer(config: ServerConfig) {
 
   function resolveAllPendingWithEmpty() {
     for (const pl of pendingListeners) {
-      clearTimeout(pl.timer);
       pl.res.json([]);
     }
     pendingListeners.length = 0;
   }
 
-  async function persistRoster() {
-    await db.read();
-    const roster: Record<string, RosterEntry> = {};
-    for (const [name, state] of agents) {
-      roster[name] = { isHost: state.isHost };
-      if (state.description !== undefined)
-        roster[name].description = state.description;
-    }
-    db.data.roster = roster;
-    await db.write();
+  /** Atomically rewrite the message log to disk (tmp + rename). */
+  function persistMessages() {
+    if (!filePath) return;
+    const tmp = `${filePath}.tmp`;
+    writeFileSync(tmp, JSON.stringify(messages));
+    renameSync(tmp, filePath);
   }
 
-  async function addMessage(
+  function addMessage(
     speaker: string,
     content: string,
     type: "message" | "system",
     mention?: string,
-  ): Promise<Message> {
-    await db.read();
+  ): Message {
     const msg: Message = {
       id: randomUUID().slice(0, 8),
       speaker,
@@ -150,22 +126,40 @@ export function createChatRoomServer(config: ServerConfig) {
     if (mention !== undefined) {
       msg.mention = mention;
     }
-    db.data.messages.push(msg);
-    await db.write();
+    messages.push(msg);
+    persistMessages();
     return msg;
+  }
+
+  /** Push a message event to everyone (and a mention event to the @target). */
+  function broadcastMessage(msg: Message, from: string, mention?: string) {
+    enqueueEvent({
+      type: "message",
+      data: { message: msg },
+      timestamp: Date.now(),
+    });
+    if (mention && agents.has(mention)) {
+      enqueueEvent(
+        {
+          type: "mention",
+          data: { message: msg, from },
+          timestamp: Date.now(),
+        },
+        mention,
+      );
+    }
   }
 
   function unreadSince(agent: AgentState): number {
     return agent.lastReadAt > 0 ? agent.lastReadAt : agent.joinedAt;
   }
 
-  async function getHistory(
+  function getHistory(
     name: string,
     limit: number | undefined,
     unreadOnly: boolean,
-  ): Promise<Message[]> {
-    await db.read();
-    let msgs = db.data.messages;
+  ): Message[] {
+    let msgs = messages;
     const agent = agents.get(name);
     if (unreadOnly && agent) {
       msgs = msgs.filter((m) => m.timestamp > unreadSince(agent));
@@ -273,12 +267,10 @@ export function createChatRoomServer(config: ServerConfig) {
       );
   }
 
+  /** Session ids encode the port so the CLI can dial back in: `s_<port>_<6hex>`. */
   function generateSessionId(): string {
-    const chars = "abcdefghijklmnopqrstuvwxyz0123456789";
-    let result = "s_";
-    for (let i = 0; i < 8; i++)
-      result += chars[Math.floor(Math.random() * chars.length)];
-    return result;
+    const hex = randomUUID().replace(/-/g, "").slice(0, 6);
+    return `s_${actualPort}_${hex}`;
   }
 
   function resolveSession(session: string): string | null {
@@ -302,78 +294,47 @@ export function createChatRoomServer(config: ServerConfig) {
     return true;
   }
 
-  function writeMarker() {
-    try {
-      if (!existsSync(markerDir)) mkdirSync(markerDir, { recursive: true });
-      markerPath = `${markerDir}/${markerFileName(roomName, actualPort)}`;
-      writeFileSync(
-        markerPath,
-        JSON.stringify({
-          roomName,
-          port: actualPort,
-          pid: process.pid,
-          startedAt: Date.now(),
-        }),
-      );
-    } catch {
-      // marker is best-effort discovery metadata
-    }
-  }
-
-  function removeMarker() {
-    if (!markerPath) return;
-    try {
-      unlinkSync(markerPath);
-    } catch {
-      /* ignore */
-    }
-    markerPath = "";
-  }
-
   const app = express();
   app.use(express.json());
 
-  app.post("/api/join", async (req, res) => {
+  app.post("/api/join", (req, res) => {
     const { name, description } = req.body ?? {};
     if (!name || typeof name !== "string") {
       res.status(400).json({ error: "name is required" });
       return;
     }
 
+    // The host is established at serve time; nobody may join under its name.
+    const reserved = agents.get(name);
+    if (reserved?.isHost) {
+      res.status(400).json({ error: "Name is reserved by the host" });
+      return;
+    }
+
     const now = Date.now();
-    await db.read();
     const existing = agents.get(name);
     if (existing) {
       existing.online = true;
       existing.lastReadAt = 0;
     } else {
-      const rosterEntry = db.data.roster[name];
-      const isHost = rosterEntry
-        ? rosterEntry.isHost
-        : agents.size === 0 && !getHost();
       agents.set(name, {
         name,
         description,
-        isHost,
+        isHost: false,
         online: true,
         joinedAt: now,
         lastReadAt: 0,
       });
-      if (rosterEntry || isHost) await persistRoster();
     }
 
     const sessionId = generateSessionId();
     sessions.set(sessionId, name);
     enqueueEvent({
       type: "agent_joined",
-      data: { agentName: name, isHost: agents.get(name)!.isHost },
+      data: { agentName: name, isHost: false },
       timestamp: Date.now(),
     });
-    res.json({
-      ok: true,
-      isHost: agents.get(name)!.isHost,
-      session: sessionId,
-    });
+    res.json({ ok: true, isHost: false, session: sessionId });
   });
 
   app.post("/api/leave", (req, res) => {
@@ -413,7 +374,7 @@ export function createChatRoomServer(config: ServerConfig) {
     res.json({ ok: true });
   });
 
-  app.post("/api/send", async (req, res) => {
+  app.post("/api/send", (req, res) => {
     const name = resolveSession(req.body?.session);
     if (!name) {
       res.status(401).json({ error: "Invalid session" });
@@ -425,41 +386,33 @@ export function createChatRoomServer(config: ServerConfig) {
       return;
     }
 
-    // Messages are only produced by the current speaker during the speaking phase.
-    if (roundState.phase !== "speaking") {
-      res.status(400).json({ error: "Not in speaking phase" });
-      return;
-    }
-    if (roundState.order[roundState.currentSpeakerIndex] !== name) {
-      res.status(400).json({ error: "Not your turn" });
-      return;
-    }
-
     const { content, mention } = req.body ?? {};
     if (!content) {
       res.status(400).json({ error: "content is required" });
       return;
     }
 
-    const msg = await addMessage(name, content, "message", mention);
-    enqueueEvent({
-      type: "message",
-      data: { message: msg },
-      timestamp: Date.now(),
-    });
-
-    if (mention && agents.has(mention)) {
-      enqueueEvent(
-        {
-          type: "mention",
-          data: { message: msg, from: name },
-          timestamp: Date.now(),
-        },
-        mention,
-      );
+    // The host may speak freely between rounds (opening/closing remarks) while
+    // the room is idle; this does not advance any turn. Otherwise a message may
+    // only come from the current speaker during the speaking phase.
+    const hostFreeSpeak = agent.isHost && roundState.phase === "idle";
+    if (!hostFreeSpeak) {
+      if (roundState.phase !== "speaking") {
+        res.status(400).json({ error: "Not in speaking phase" });
+        return;
+      }
+      if (roundState.order[roundState.currentSpeakerIndex] !== name) {
+        res.status(400).json({ error: "Not your turn" });
+        return;
+      }
     }
 
-    advanceSpeaker();
+    const msg = addMessage(name, content, "message", mention);
+    // A sender has already seen their own message — advance their read cursor
+    // past it so it doesn't show as unread to them.
+    agent.lastReadAt = msg.timestamp;
+    broadcastMessage(msg, name, mention);
+    if (!hostFreeSpeak) advanceSpeaker();
     res.json({ ok: true, messageId: msg.id });
   });
 
@@ -594,25 +547,24 @@ export function createChatRoomServer(config: ServerConfig) {
     if (srv)
       setTimeout(() => {
         srv.close(() => {});
-        removeMarker();
       }, 100);
   });
 
-  app.get("/api/status", async (req, res) => {
+  app.get("/api/status", (req, res) => {
     const name = resolveSession(req.query.session as string);
     if (!name) {
       res.status(401).json({ error: "Invalid session" });
       return;
     }
 
-    await db.read();
-    const msgs = db.data.messages;
+    const msgs = messages;
     const agent = agents.get(name);
     const since = agent ? unreadSince(agent) : 0;
     const unreadMsgs = agent ? msgs.filter((m) => m.timestamp > since) : [];
     const myMentions = unreadMsgs.filter((m) => m.mention === name);
-    markRead(name);
 
+    // status is a pure peek — it reports unread state but does NOT advance the
+    // read cursor. Only `history` marks messages read.
     res.json({
       roomName,
       host: getHost()?.name || null,
@@ -634,7 +586,7 @@ export function createChatRoomServer(config: ServerConfig) {
     });
   });
 
-  app.get("/api/history", async (req, res) => {
+  app.get("/api/history", (req, res) => {
     const name = resolveSession(req.query.session as string);
     if (!name) {
       res.status(401).json({ error: "Invalid session" });
@@ -644,7 +596,7 @@ export function createChatRoomServer(config: ServerConfig) {
     const limit = parseInt((req.query.limit as string) || "50", 10);
     const unreadOnly = req.query.unreadOnly === "true";
 
-    const msgs = await getHistory(
+    const msgs = getHistory(
       name,
       Number.isFinite(limit) ? limit : undefined,
       unreadOnly,
@@ -691,69 +643,49 @@ export function createChatRoomServer(config: ServerConfig) {
       return;
     }
 
-    const timer = setTimeout(() => {
-      const idx = pendingListeners.findIndex((pl) => pl.res === res);
-      if (idx !== -1) {
-        pendingListeners.splice(idx, 1);
-        res.json([]);
-      }
-    }, LISTEN_LONG_POLL_MS);
-
     // Drop the pending listener if the client disconnects while waiting, so we
-    // don't keep the entry around or write to a closed socket when it times out.
+    // don't keep the entry around or write to a closed socket later.
     res.on("close", () => {
       const idx = pendingListeners.findIndex((pl) => pl.res === res);
       if (idx !== -1) {
-        clearTimeout(pendingListeners[idx]!.timer);
         pendingListeners.splice(idx, 1);
       }
     });
 
-    pendingListeners.push({ agentName, events: eventTypes, res, timer });
+    pendingListeners.push({ agentName, events: eventTypes, res });
   });
 
   let server: ReturnType<typeof app.listen> | null = null;
 
-  async function restoreRoster() {
-    await db.read();
-    for (const [name, entry] of Object.entries(db.data.roster)) {
-      const agent: AgentState = {
-        name,
-        isHost: entry.isHost,
-        online: false,
-        joinedAt: Date.now(),
-        lastReadAt: 0,
-      };
-      if (entry.description !== undefined)
-        agent.description = entry.description;
-      agents.set(name, agent);
-    }
-  }
-
   return {
-    get server() {
-      return server;
-    },
     get port() {
       return actualPort;
     },
-    getRoundState: () => roundState,
-    getAgents: () => agents,
-    getDb: () => db,
+    get filePath() {
+      return filePath;
+    },
     async start() {
-      const dir = dirname(dbPath);
       if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
-      await db.read();
-      db.data ||= { messages: [], roster: {} };
-      db.data.messages ||= [];
-      db.data.roster ||= {};
-      await db.write();
-      await restoreRoster();
+      // Establish the host up front (it never joins via the API).
+      if (host) {
+        const hostAgent: AgentState = {
+          name: host.name,
+          isHost: true,
+          online: true,
+          joinedAt: Date.now(),
+          lastReadAt: 0,
+        };
+        if (host.description !== undefined)
+          hostAgent.description = host.description;
+        agents.set(host.name, hostAgent);
+        sessions.set(host.session, host.name);
+      }
       return new Promise<void>((resolve, reject) => {
         server = app.listen(port, "127.0.0.1", () => {
           const addr = server!.address();
           actualPort = typeof addr === "object" && addr ? addr.port : port;
-          writeMarker();
+          filePath = join(dir, roomFileName(roomName, actualPort));
+          writeFileSync(filePath, "[]");
           resolve();
         });
         server.on("error", reject);
@@ -761,7 +693,6 @@ export function createChatRoomServer(config: ServerConfig) {
     },
     async stop() {
       resolveAllPendingWithEmpty();
-      removeMarker();
       if (!server) return;
       const srv = server;
       return new Promise<void>((resolve) => srv.close(() => resolve()));

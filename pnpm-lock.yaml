@@ -26,9 +26,6 @@ importers:
       express:
         specifier: ^5.2.1
         version: 5.2.1
-      lowdb:
-        specifier: ^7.0.1
-        version: 7.0.1
     devDependencies:
       '@types/express':
         specifier: ^5.0.6
@@ -450,10 +447,6 @@ packages:
   lodash.startcase@4.4.0:
     resolution: {integrity: sha512-+WKqsK294HMSc2jEbNgpHpd0JfIBhp7rEV4aqXWqFr6AlXov+SlcgB1Fv01y2kGe3Gc8nMW7VA0SrGuSkRfIEg==}
 
-  lowdb@7.0.1:
-    resolution: {integrity: sha512-neJAj8GwF0e8EpycYIDFqEPcx9Qz4GUho20jWFR7YiFeXzF1YMLdxB36PypcTSPMA+4+LvgyMacYhlr18Zlymw==}
-    engines: {node: '>=18'}
-
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
     engines: {node: '>= 0.4'}
@@ -671,10 +664,6 @@ packages:
   statuses@2.0.2:
     resolution: {integrity: sha512-DvEy55V3DB7uknRo+4iOGT5fP1slR8wQohVdknigZPMpMstaKJQWhwiYBACJE3Ul2pTnATihhBYnRhZQHGBiRw==}
     engines: {node: '>= 0.8'}
-
-  steno@4.0.2:
-    resolution: {integrity: sha512-yhPIQXjrlt1xv7dyPQg2P17URmXbuM5pdGkpiMB3RenprfiBlvK415Lctfe0eshk90oA7/tNq7WEiMK8RSP39A==}
-    engines: {node: '>=18'}
 
   strip-ansi@6.0.1:
     resolution: {integrity: sha512-Y38VPSHcqkFrCpFnQ9vuSXmquuv5oXOKpGeT6aGrr3o3Gc9AlVa6JBfUSOCnbxGGZF+/0ooI7KrPuUSztUdU5A==}
@@ -1257,10 +1246,6 @@ snapshots:
 
   lodash.startcase@4.4.0: {}
 
-  lowdb@7.0.1:
-    dependencies:
-      steno: 4.0.2
-
   math-intrinsics@1.1.0: {}
 
   media-typer@1.1.0: {}
@@ -1463,8 +1448,6 @@ snapshots:
   sprintf-js@1.0.3: {}
 
   statuses@2.0.2: {}
-
-  steno@4.0.2: {}
 
   strip-ansi@6.0.1:
     dependencies:

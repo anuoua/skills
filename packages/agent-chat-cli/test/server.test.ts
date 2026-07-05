@@ -1,34 +1,45 @@
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
+import { randomBytes } from "node:crypto";
 import { createChatRoomServer } from "../src/server.ts";
-import { findRoomFile, markerFileName, dbFileName } from "../src/room.ts";
+import { roomFileName, portFromFile, portFromSession } from "../src/room.ts";
 import { apiPost, apiGet } from "../src/client.ts";
-import { mkdtempSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 interface RoomHandle {
   room: ReturnType<typeof createChatRoomServer>;
   port: number;
+  filePath: string;
+  hostSession: string;
   stop: () => Promise<void>;
 }
 
 async function startRoom(opts: {
   roomName?: string;
-  dbPath: string;
-  markerDir: string;
+  dir: string;
+  host: { name: string; description?: string };
 }): Promise<RoomHandle> {
+  const hostSession = `s_host_${randomBytes(3).toString("hex")}`;
+  const host: { name: string; description?: string; session: string } = {
+    name: opts.host.name,
+    session: hostSession,
+  };
+  if (opts.host.description !== undefined)
+    host.description = opts.host.description;
   const room = createChatRoomServer({
     roomName: opts.roomName ?? "test-room",
     port: 0,
-    dbPath: opts.dbPath,
-    markerDir: opts.markerDir,
+    dir: opts.dir,
+    host,
   });
   await room.start();
-  const port = room.port;
   return {
     room,
-    port,
+    port: room.port,
+    filePath: room.filePath,
+    hostSession,
     stop: async () => {
       await room.stop();
     },
@@ -46,44 +57,23 @@ async function joinAgent(
   return result.session;
 }
 
-describe("room discovery", () => {
-  const markerDir = mkdtempSync(join(tmpdir(), "agent-chat-marker-"));
-
-  after(() => {
-    rmSync(markerDir, { recursive: true, force: true });
+describe("file & session helpers", () => {
+  it("roomFileName formats <room>.<port>.json", () => {
+    assert.equal(roomFileName("test", 8080), "test.8080.json");
+    assert.equal(roomFileName("游戏讨论", 38945), "游戏讨论.38945.json");
   });
 
-  it("markerFileName formats correctly", () => {
-    assert.equal(markerFileName("test", 8080), "test.8080.json");
-    assert.equal(markerFileName("游戏讨论", 38945), "游戏讨论.38945.json");
+  it("portFromFile parses the port from a room file path", () => {
+    assert.equal(portFromFile("test.8080.json"), 8080);
+    assert.equal(portFromFile("./dir/test-room.54321.json"), 54321);
+    assert.equal(portFromFile("nope.json"), null);
+    assert.equal(portFromFile("test.json"), null);
   });
 
-  it("dbFileName formats correctly", () => {
-    assert.equal(dbFileName("test"), "test.json");
-  });
-
-  it("returns null when no marker exists", async () => {
-    const result = await findRoomFile("nonexistent", markerDir);
-    assert.equal(result, null);
-  });
-
-  it("finds a live room by marker and prunes stale ones", async () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), "ac-")), "live.json");
-    const handle = await startRoom({
-      roomName: "live-room",
-      dbPath,
-      markerDir,
-    });
-    try {
-      const result = await findRoomFile("live-room", markerDir);
-      assert.ok(result, "expected to find live room");
-      assert.equal(result!.port, handle.port);
-    } finally {
-      await handle.stop();
-    }
-    // marker should be removed on stop
-    const after = await findRoomFile("live-room", markerDir);
-    assert.equal(after, null);
+  it("portFromSession parses the port from a session id", () => {
+    assert.equal(portFromSession("s_54321_a1b2c3"), 54321);
+    assert.equal(portFromSession("s_invalid"), null);
+    assert.equal(portFromSession("s_bad"), null);
   });
 });
 
@@ -92,41 +82,45 @@ describe("chat room server with session", () => {
   let hostSession = "";
   let aliceSession = "";
   let bobSession = "";
-  const dbPath = join(mkdtempSync(join(tmpdir(), "ac-")), "main.json");
-  const markerDir = mkdtempSync(join(tmpdir(), "ac-marker-"));
+  const dir = mkdtempSync(join(tmpdir(), "ac-"));
   let room: ReturnType<typeof createChatRoomServer>;
 
   before(async () => {
-    const handle = await startRoom({ dbPath, markerDir });
+    const handle = await startRoom({
+      dir,
+      host: { name: "host", description: "主持" },
+    });
     room = handle.room;
     port = handle.port;
+    hostSession = handle.hostSession;
   });
 
   after(async () => {
     await room.stop();
-    rmSync(markerDir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   });
 
-  it("join: first agent becomes host and gets session", async () => {
-    const result = (await apiPost(port, "/api/join", {
-      name: "host",
-      description: "主持",
-    })) as any;
-    assert.equal(result.ok, true);
-    assert.equal(result.isHost, true);
-    assert.ok(typeof result.session === "string");
-    assert.ok(result.session.startsWith("s_"));
-    hostSession = result.session;
+  it("host is registered at serve time", async () => {
+    const result = (await apiGet(port, "/api/agents")) as any;
+    assert.equal(result.agents.length, 1);
+    assert.equal(result.agents[0].name, "host");
+    assert.equal(result.agents[0].isHost, true);
   });
 
-  it("join: subsequent agents get session", async () => {
+  it("join: an agent gets a non-host, port-encoded session", async () => {
     const result = (await apiPost(port, "/api/join", {
       name: "alice",
       description: "分析",
     })) as any;
     assert.equal(result.ok, true);
     assert.equal(result.isHost, false);
+    assert.equal(portFromSession(result.session), port);
     aliceSession = result.session;
+  });
+
+  it("join: rejects the host's reserved name", async () => {
+    const result = (await apiPost(port, "/api/join", { name: "host" })) as any;
+    assert.equal(result.error, "Name is reserved by the host");
   });
 
   it("join: third agent", async () => {
@@ -134,7 +128,7 @@ describe("chat room server with session", () => {
     bobSession = result.session;
   });
 
-  it("agents: list online agents", async () => {
+  it("agents: lists host + joined agents", async () => {
     const result = (await apiGet(port, "/api/agents")) as any;
     assert.equal(result.agents.length, 3);
     assert.equal(result.agents[0].name, "host");
@@ -167,6 +161,28 @@ describe("chat room server with session", () => {
   it("history: rejects invalid session", async () => {
     const result = (await apiGet(port, "/api/history?session=s_bad")) as any;
     assert.equal(result.error, "Invalid session");
+  });
+
+  it("send: host may speak freely while idle (opening/closing remarks)", async () => {
+    const result = (await apiPost(port, "/api/send", {
+      session: hostSession,
+      content: "welcome everyone",
+    })) as any;
+    assert.equal(result.ok, true);
+    const status = (await apiGet(
+      port,
+      `/api/status?session=${hostSession}`,
+    )) as any;
+    assert.equal(status.roundState.phase, "idle");
+    // the host's own message must not count as unread to the host
+    assert.equal(status.unreadCount, 0, "own message is not unread to sender");
+    const history = (await apiGet(
+      port,
+      `/api/history?session=${hostSession}`,
+    )) as any;
+    assert.ok(
+      history.messages.some((m: any) => m.content === "welcome everyone"),
+    );
   });
 
   it("collect: with host session", async () => {
@@ -367,6 +383,15 @@ describe("chat room server with session", () => {
     assert.equal(result.error, "Invalid session");
   });
 
+  it("messages are persisted to the room file", async () => {
+    const onDisk = JSON.parse(readFileSync(room.filePath, "utf-8")) as any[];
+    assert.ok(Array.isArray(onDisk));
+    assert.ok(
+      onDisk.some((m) => m.content === "charlie speaking"),
+      "sent message should be in the file",
+    );
+  });
+
   it("kill: host can kill the room", async () => {
     const result = (await apiPost(port, "/api/kill", {
       session: hostSession,
@@ -376,34 +401,32 @@ describe("chat room server with session", () => {
 });
 
 describe("offline agent is skipped in speaking order (Issue 7)", () => {
-  const dbPath = join(mkdtempSync(join(tmpdir(), "ac-")), "skip.json");
-  const markerDir = mkdtempSync(join(tmpdir(), "ac-marker-"));
+  const dir = mkdtempSync(join(tmpdir(), "ac-"));
 
   after(() => {
-    rmSync(markerDir, { recursive: true, force: true });
+    rmSync(dir, { recursive: true, force: true });
   });
 
   it("advances past an agent who left mid-order", async () => {
     const handle = await startRoom({
-      dbPath,
-      markerDir,
+      dir,
       roomName: "skip-room",
+      host: { name: "host", description: "主持" },
     });
-    const { port, stop } = handle;
+    const { port, hostSession, stop } = handle;
     try {
-      const host = await joinAgent(port, "host", "主持");
       const a = await joinAgent(port, "a");
       const b = await joinAgent(port, "b");
       const c = await joinAgent(port, "c");
 
-      await apiPost(port, "/api/collect", { session: host });
+      await apiPost(port, "/api/collect", { session: hostSession });
       await apiPost(port, "/api/raise", { session: a, weight: 1 });
       await apiPost(port, "/api/raise", { session: b, weight: 1 });
       await apiPost(port, "/api/raise", { session: c, weight: 1 });
 
       // all three are online and participating when order is set
       const orderResult = (await apiPost(port, "/api/order", {
-        session: host,
+        session: hostSession,
         order: ["a", "b", "c"],
       })) as any;
       assert.equal(orderResult.ok, true);
@@ -425,7 +448,10 @@ describe("offline agent is skipped in speaking order (Issue 7)", () => {
       })) as any;
       assert.equal(cSend.ok, true);
 
-      const status = (await apiGet(port, `/api/status?session=${host}`)) as any;
+      const status = (await apiGet(
+        port,
+        `/api/status?session=${hostSession}`,
+      )) as any;
       assert.equal(status.roundState.phase, "idle");
     } finally {
       await stop();
@@ -434,102 +460,53 @@ describe("offline agent is skipped in speaking order (Issue 7)", () => {
 });
 
 describe("unread tracking via lastReadAt (Issue 11)", () => {
-  it("counts unread only for messages after last read", async () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), "ac-")), "unread.json");
-    const markerDir = mkdtempSync(join(tmpdir(), "ac-marker-"));
+  it("status peeks without consuming; history marks read", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ac-"));
     const handle = await startRoom({
-      dbPath,
-      markerDir,
+      dir,
       roomName: "unread-room",
+      host: { name: "host" },
     });
-    const { port, stop } = handle;
+    const { port, hostSession, stop } = handle;
     // host is the reader; bob is the sole speaker (messages only exist inside rounds)
     const speak = async (content: string) => {
-      await apiPost(port, "/api/collect", { session: host });
+      await apiPost(port, "/api/collect", { session: hostSession });
       await apiPost(port, "/api/raise", { session: bob, weight: 1 });
-      await apiPost(port, "/api/order", { session: host, order: ["bob"] });
+      await apiPost(port, "/api/order", { session: hostSession, order: ["bob"] });
       await apiPost(port, "/api/send", { session: bob, content });
     };
-    let host = "";
     let bob = "";
     try {
-      host = await joinAgent(port, "host");
       bob = await joinAgent(port, "bob");
 
       await speak("msg1");
-      // host reads -> marks lastReadAt
-      await apiGet(port, `/api/status?session=${host}`);
+      // history is the consume action — it advances the read cursor
+      await apiGet(port, `/api/history?session=${hostSession}`);
 
       await speak("msg2");
 
-      const beforeRead = (await apiGet(
+      // status is a peek: two calls in a row both report the same unread count
+      const peek1 = (await apiGet(
         port,
-        `/api/status?session=${host}`,
+        `/api/status?session=${hostSession}`,
       )) as any;
-      assert.equal(beforeRead.unreadCount, 1, "only msg2 is unread");
+      const peek2 = (await apiGet(
+        port,
+        `/api/status?session=${hostSession}`,
+      )) as any;
+      assert.equal(peek1.unreadCount, 1, "only msg2 is unread");
+      assert.equal(peek2.unreadCount, 1, "status does not consume unread");
 
-      // reading again clears it
+      // history marks read; status then reports zero
+      await apiGet(port, `/api/history?session=${hostSession}`);
       const afterRead = (await apiGet(
         port,
-        `/api/status?session=${host}`,
+        `/api/status?session=${hostSession}`,
       )) as any;
       assert.equal(afterRead.unreadCount, 0);
     } finally {
       await stop();
-      rmSync(markerDir, { recursive: true, force: true });
-    }
-  });
-});
-
-describe("persistence across restart (Issue 12)", () => {
-  it("preserves messages and host roster identity", async () => {
-    const dbPath = join(mkdtempSync(join(tmpdir(), "ac-")), "persist.json");
-    const markerDir = mkdtempSync(join(tmpdir(), "ac-marker-"));
-    const handle1 = await startRoom({
-      dbPath,
-      markerDir,
-      roomName: "persist-room",
-    });
-    const port1 = handle1.port;
-    const host = await joinAgent(port1, "leader");
-    const bob = await joinAgent(port1, "bob");
-    // produce a message via a real round (no free messages)
-    await apiPost(port1, "/api/collect", { session: host });
-    await apiPost(port1, "/api/raise", { session: bob, weight: 1 });
-    await apiPost(port1, "/api/order", { session: host, order: ["bob"] });
-    await apiPost(port1, "/api/send", { session: bob, content: "remember me" });
-    await handle1.stop();
-
-    assert.ok(existsSync(dbPath), "db file should exist");
-
-    const handle2 = await startRoom({
-      dbPath,
-      markerDir,
-      roomName: "persist-room",
-    });
-    const port2 = handle2.port;
-    try {
-      // same name rejoins -> should retain host identity from roster
-      const rejoin = (await apiPost(port2, "/api/join", {
-        name: "leader",
-      })) as any;
-      assert.equal(
-        rejoin.isHost,
-        true,
-        "host identity should persist across restart",
-      );
-
-      const history = (await apiGet(
-        port2,
-        `/api/history?session=${rejoin.session}`,
-      )) as any;
-      assert.ok(
-        history.messages.some((m: any) => m.content === "remember me"),
-        "messages should survive restart",
-      );
-    } finally {
-      await handle2.stop();
-      rmSync(markerDir, { recursive: true, force: true });
+      rmSync(dir, { recursive: true, force: true });
     }
   });
 });
