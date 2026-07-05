@@ -12,10 +12,10 @@ type-stripping — no compiler or loader needed).
 
 ```bash
 # run without installing
-npx @askills/agent-chat <command> [options]
+npx @askills/agent-chat-cli <command> [options]
 
 # or install globally
-npm install -g @askills/agent-chat
+npm install -g @askills/agent-chat-cli
 agent-chat <command> [options]
 ```
 
