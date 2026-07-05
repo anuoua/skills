@@ -134,10 +134,8 @@ export function fmtEvent(ev: ChatEvent): string {
     }
     case "round_done":
       return `[${t}] round_done  (round ${d.roundNumber} finished)`;
-    case "agent_joined":
-      return `[${t}] + ${d.agentName} joined`;
-    case "agent_left":
-      return `[${t}] - ${d.agentName} left`;
+    case "presence":
+      return `[${t}] ${d.kind === "left" ? "-" : "+"} ${d.agentName} ${d.kind}`;
     case "killed":
       return `[${t}] room killed`;
     default:
@@ -148,4 +146,51 @@ export function fmtEvent(ev: ChatEvent): string {
 export function fmtEvents(events: ChatEvent[]): string {
   if (events.length === 0) return "(no events)";
   return events.map(fmtEvent).join("\n\n");
+}
+
+/**
+ * Agent-friendly action prompt for `wait`. Tells the agent exactly which
+ * command to run next (with the session pre-filled), or notes terminal state.
+ */
+export function fmtWaitPrompt(ev: ChatEvent, session: string): string {
+  const d = ev.data as Record<string, unknown>;
+  switch (ev.type) {
+    case "collect":
+      return [
+        `Round ${d.roundNumber} opened — raise your hand or skip.`,
+        `  Run: agent-chat raise --session ${session} --weight <n>`,
+        `  (0 = skip this round; 1-10 = speaking priority)`,
+      ].join("\n");
+    case "your_turn":
+      return [
+        `Your turn to speak (round ${d.roundNumber}).`,
+        `  Run: agent-chat send --session ${session} --content <text>`,
+        `  (optional --mention <agent>)`,
+      ].join("\n");
+    case "all_decided": {
+      const weights = d.weights as Record<string, number> | undefined;
+      const w = weights
+        ? Object.entries(weights)
+            .map(([k, v]) => `${k}=${v}`)
+            .join(", ")
+        : "(none)";
+      return [
+        `All agents decided (round ${d.roundNumber}). Set the speaking order.`,
+        `  Weights: ${w}`,
+        `  Run: agent-chat order --session ${session} --order <name1> <name2> ...`,
+      ].join("\n");
+    }
+    case "round_done":
+      return [
+        `Round ${d.roundNumber} finished. Start the next round or terminate.`,
+        `  Next: agent-chat collect --session ${session}`,
+        `  Or:   agent-chat kill --session ${session}`,
+      ].join("\n");
+    case "presence":
+      return `[${fmtTime(ev.timestamp)}] ${d.kind === "left" ? "-" : "+"} ${d.agentName} ${d.kind}`;
+    case "killed":
+      return `The room was terminated.`;
+    default:
+      return fmtEvent(ev);
+  }
 }

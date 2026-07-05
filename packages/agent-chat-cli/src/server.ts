@@ -329,11 +329,16 @@ export function createChatRoomServer(config: ServerConfig) {
 
     const sessionId = generateSessionId();
     sessions.set(sessionId, name);
-    enqueueEvent({
-      type: "agent_joined",
-      data: { agentName: name, isHost: false },
-      timestamp: Date.now(),
-    });
+    const joinHost = getHost();
+    if (joinHost)
+      enqueueEvent(
+        {
+          type: "presence",
+          data: { agentName: name, kind: "joined" },
+          timestamp: Date.now(),
+        },
+        joinHost.name,
+      );
     res.json({ ok: true, isHost: false, session: sessionId });
   });
 
@@ -360,11 +365,16 @@ export function createChatRoomServer(config: ServerConfig) {
     for (const [sid, agentName] of sessions) {
       if (agentName === name) sessions.delete(sid);
     }
-    enqueueEvent({
-      type: "agent_left",
-      data: { agentName: name, reason: "left" },
-      timestamp: Date.now(),
-    });
+    const leaveHost = getHost();
+    if (leaveHost)
+      enqueueEvent(
+        {
+          type: "presence",
+          data: { agentName: name, kind: "left" },
+          timestamp: Date.now(),
+        },
+        leaveHost.name,
+      );
     checkAllDecided();
     if (
       roundState.phase === "speaking" &&

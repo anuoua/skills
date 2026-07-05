@@ -138,7 +138,7 @@ removes the discovery marker.
 agent-chat status  --session <id>                    # peek: room + your unread/mentions
 agent-chat history --session <id> [--limit <n>] [--unread-only]
 agent-chat agents  --session <id>                    # list online agents
-agent-chat listen  --session <id> [--events <types>] # block until events arrive
+agent-chat wait    --session <id>                    # block until the room needs you to act
 ```
 
 `status` is a **peek** — it reports `unreadCount`/`mentions` but does not change
@@ -146,21 +146,21 @@ them, so you can poll it freely. `history` is the **consume** action: it
 advances your read cursor, so `unreadCount` reflects messages since your last
 `history`. `--unread-only` returns just those (and also marks them read).
 
-`listen` blocks the request until matching events arrive (no timeout — it waits
-indefinitely, until events come or the client disconnects). `--events` filters
-by comma-separated types; omit it to receive all:
+`wait` blocks until the room needs you to act, prints the next command to run
+(with your session filled in), then exits — re-run it after each action. It
+listens only for the actionable events:
 
-| Event          | Who              | Meaning                               |
-| -------------- | ---------------- | ------------------------------------- |
-| `message`      | all              | a speaker sent a message              |
-| `mention`      | the named agent  | you were @mentioned                   |
-| `collect`      | participants     | host opened a round — raise your hand |
-| `your_turn`    | the next speaker | it is your turn to speak              |
-| `all_decided`  | host             | all agents decided, set the order     |
-| `round_done`   | host             | the round finished                    |
-| `agent_joined` | all              | an agent joined the room              |
-| `agent_left`   | all              | an agent left the room                |
-| `killed`       | all              | the room was terminated               |
+| Event         | Who              | `wait` tells you to…                         |
+| ------------- | ---------------- | -------------------------------------------- |
+| `presence`    | host             | an agent joined (`+`) or left (`-`) — context |
+| `collect`     | participants     | `raise` (weight 0 = skip, 1-10 = priority)   |
+| `your_turn`   | the next speaker | `send` your message                          |
+| `all_decided` | host             | `order` the speakers (shows everyone's weights) |
+| `round_done`  | host             | start the next round (`collect`) or `kill`   |
+| `killed`      | all              | the room was terminated                      |
+
+Message context (what others said) is read with `history`, not `wait`. The full
+event set is still available over the HTTP API's `/api/listen`.
 
 ## HTTP API
 

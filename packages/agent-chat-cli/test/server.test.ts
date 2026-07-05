@@ -3,7 +3,9 @@ import assert from "node:assert/strict";
 import { randomBytes } from "node:crypto";
 import { createChatRoomServer } from "../src/server.ts";
 import { roomFileName, portFromFile, portFromSession } from "../src/room.ts";
+import { fmtWaitPrompt } from "../src/format.ts";
 import { apiPost, apiGet } from "../src/client.ts";
+import type { ChatEvent } from "../src/types.ts";
 import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -74,6 +76,149 @@ describe("file & session helpers", () => {
     assert.equal(portFromSession("s_54321_a1b2c3"), 54321);
     assert.equal(portFromSession("s_invalid"), null);
     assert.equal(portFromSession("s_bad"), null);
+  });
+});
+
+describe("wait prompts (fmtWaitPrompt)", () => {
+  const S = "s_54321_abc";
+
+  it("collect → tells the agent to raise", () => {
+    const ev: ChatEvent = {
+      type: "collect",
+      data: { roundNumber: 2 },
+      timestamp: 0,
+    };
+    const out = fmtWaitPrompt(ev, S);
+    assert.ok(out.includes("raise"), out);
+    assert.ok(out.includes(S), "session is filled in");
+    assert.ok(out.includes("Round 2"));
+  });
+
+  it("your_turn → tells the agent to send", () => {
+    const ev: ChatEvent = {
+      type: "your_turn",
+      data: { agentName: "alice", roundNumber: 2 },
+      timestamp: 0,
+    };
+    const out = fmtWaitPrompt(ev, S);
+    assert.ok(out.includes("send"), out);
+    assert.ok(out.includes(S));
+  });
+
+  it("all_decided → tells the host to order, with weights", () => {
+    const ev: ChatEvent = {
+      type: "all_decided",
+      data: { roundNumber: 1, weights: { alice: 5, bob: 3 } },
+      timestamp: 0,
+    };
+    const out = fmtWaitPrompt(ev, S);
+    assert.ok(out.includes("order"), out);
+    assert.ok(out.includes("alice=5"));
+    assert.ok(out.includes("bob=3"));
+  });
+
+  it("round_done → tells the host to collect or kill", () => {
+    const ev: ChatEvent = {
+      type: "round_done",
+      data: { roundNumber: 1 },
+      timestamp: 0,
+    };
+    const out = fmtWaitPrompt(ev, S);
+    assert.ok(out.includes("collect"), out);
+    assert.ok(out.includes("kill"), out);
+    assert.ok(out.includes("Round 1"));
+  });
+
+  it("killed → reports termination", () => {
+    const ev: ChatEvent = {
+      type: "killed",
+      data: {},
+      timestamp: 0,
+    };
+    const out = fmtWaitPrompt(ev, S);
+    assert.ok(out.toLowerCase().includes("terminated"), out);
+  });
+
+  it("presence → marks join (+) or leave (-)", () => {
+    const join: ChatEvent = {
+      type: "presence",
+      data: { agentName: "alice", kind: "joined" },
+      timestamp: 0,
+    };
+    const left: ChatEvent = {
+      type: "presence",
+      data: { agentName: "bob", kind: "left" },
+      timestamp: 0,
+    };
+    assert.ok(fmtWaitPrompt(join, S).includes("+ alice joined"));
+    assert.ok(fmtWaitPrompt(left, S).includes("- bob left"));
+  });
+});
+
+describe("presence event (merged join/leave)", () => {
+  it("emits a presence event to the host only", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "ac-"));
+    const handle = await startRoom({
+      dir,
+      roomName: "presence-room",
+      host: { name: "host" },
+    });
+    const { port, hostSession, stop } = handle;
+    try {
+      const alice = await joinAgent(port, "alice");
+
+      // host hears alice's join
+      const heard = (await apiGet(
+        port,
+        `/api/listen?session=${hostSession}&events=presence`,
+      )) as any;
+      assert.ok(
+        Array.isArray(heard) &&
+          heard.some(
+            (e: any) =>
+              e.type === "presence" &&
+              e.data.agentName === "alice" &&
+              e.data.kind === "joined",
+          ),
+        "host hears alice's join as a presence event",
+      );
+
+      // alice must NOT hear presence — flush her listen with a collect event and
+      // confirm she gets collect but no presence
+      await apiPost(port, "/api/collect", { session: hostSession });
+      const aliceSaw = (await apiGet(
+        port,
+        `/api/listen?session=${alice}&events=presence,collect`,
+      )) as any;
+      assert.ok(
+        Array.isArray(aliceSaw) && aliceSaw.some((e: any) => e.type === "collect"),
+        "alice receives the collect event",
+      );
+      assert.ok(
+        !aliceSaw.some((e: any) => e.type === "presence"),
+        "non-host agents do not receive presence events",
+      );
+
+      // alice leaves -> host hears a 'left' presence event
+      await apiPost(port, "/api/leave", { session: alice });
+      const heard2 = (await apiGet(
+        port,
+        `/api/listen?session=${hostSession}&events=presence`,
+      )) as any;
+      assert.ok(
+        Array.isArray(heard2) &&
+          heard2.some(
+            (e: any) =>
+              e.type === "presence" &&
+              e.data.agentName === "alice" &&
+              e.data.kind === "left",
+          ),
+        "host hears alice's leave as a presence event",
+      );
+    } finally {
+      await stop();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

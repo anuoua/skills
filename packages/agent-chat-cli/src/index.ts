@@ -20,7 +20,7 @@ import {
   fmtStatus,
   fmtHistory,
   fmtAgents,
-  fmtEvents,
+  fmtWaitPrompt,
 } from "./format.ts";
 
 const indexScript = fileURLToPath(import.meta.url);
@@ -47,7 +47,7 @@ Quick reference:
   status  --session <id>
   history --session <id> [--limit <n>] [--unread-only]
   agents  --session <id>
-  listen  --session <id> [--events <types>]
+  wait    --session <id>                  # block until the room needs you to act
 Use: agent-chat <command> --help for details
 `,
 );
@@ -335,24 +335,24 @@ program
   });
 
 program
-  .command("listen")
+  .command("wait")
   .description(
-    "Block until matching events arrive (no timeout — waits indefinitely until events come or you disconnect).\n\n  Event types:\n    message       a speaker sent a message\n    mention       you were @mentioned\n    collect       host opened a round (raise your hand)\n    your_turn     it is your turn to speak\n    all_decided   (host) all agents decided, set the order\n    round_done    (host) the round finished\n    agent_joined  an agent joined the room\n    agent_left    an agent left the room\n    killed        the room was terminated\n  Omit --events to receive all of them.",
+    "Block until the room needs you to act, then print what to do and exit.\n\n  collect      -> raise your hand (or skip)\n  your_turn   -> send your message\n  all_decided -> (host) set the speaking order\n  round_done  -> (host) start the next round or kill\n  presence    -> an agent joined or left (context)\n  killed       -> room terminated\n\nRe-run after each event. Message context is read with `history`.",
   )
   .requiredOption("--session <id>", "Session ID from join")
-  .option(
-    "--events <types>",
-    "Comma-separated event types to filter on (see list above)",
-  )
   .action(async (opts) => {
     const port = resolvePortFromSession(opts.session);
     const params = new URLSearchParams();
     params.set("session", opts.session);
-    if (opts.events) params.set("events", opts.events);
+    params.set(
+      "events",
+      "presence,collect,your_turn,all_decided,round_done,killed",
+    );
     const result = checkError(
       await apiGet(port, `/api/listen?${params.toString()}`),
     );
-    console.log(fmtEvents(result as unknown as ChatEvent[]));
+    const events = result as unknown as ChatEvent[];
+    for (const ev of events) console.log(fmtWaitPrompt(ev, opts.session));
   });
 
 program.parse(process.argv);
