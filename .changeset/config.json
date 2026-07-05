@@ -6,6 +6,5 @@
   "linked": [],
   "access": "public",
   "baseBranch": "develop",
-  "updateInternalDependencies": "patch",
-  "ignore": ["@askills/openapi-explorer-cli"]
+  "updateInternalDependencies": "patch"
 }
