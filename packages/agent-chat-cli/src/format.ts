@@ -92,13 +92,17 @@ interface StatusView {
 
 export function fmtStatus(r: StatusView): string {
   const lines: string[] = [];
-  lines.push(`${r.roomName} · round ${r.roundState.roundNumber} · ${r.roundState.phase}`);
+  lines.push(
+    `${r.roomName} · round ${r.roundState.roundNumber} · ${r.roundState.phase}`,
+  );
   lines.push(`Host: ${r.host ?? "(none)"}`);
   const online = r.onlineAgents.map((a) => a.name).join(", ");
   lines.push(`Online: ${online || "(none)"}`);
   const msgWord = r.unreadCount === 1 ? "message" : "messages";
   const mentionWord = r.mentions === 1 ? "mention" : "mentions";
-  lines.push(`Unread: ${r.unreadCount} ${msgWord} · ${r.mentions} ${mentionWord}`);
+  lines.push(
+    `Unread: ${r.unreadCount} ${msgWord} · ${r.mentions} ${mentionWord}`,
+  );
   for (const m of r.mentionMessages ?? []) {
     lines.push(`  ← ${m.speaker}: ${truncate(m.content)}`);
   }

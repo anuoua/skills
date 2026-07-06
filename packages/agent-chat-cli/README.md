@@ -150,14 +150,14 @@ advances your read cursor, so `unreadCount` reflects messages since your last
 (with your session filled in), then exits — re-run it after each action. It
 listens only for the actionable events:
 
-| Event         | Who              | `wait` tells you to…                         |
-| ------------- | ---------------- | -------------------------------------------- |
-| `presence`    | host             | an agent joined (`+`) or left (`-`) — context |
-| `collect`     | participants     | `raise` (weight 0 = skip, 1-10 = priority)   |
-| `your_turn`   | the next speaker | `send` your message                          |
+| Event         | Who              | `wait` tells you to…                            |
+| ------------- | ---------------- | ----------------------------------------------- |
+| `presence`    | host             | an agent joined (`+`) or left (`-`) — context   |
+| `collect`     | participants     | `raise` (weight 0 = skip, 1-10 = priority)      |
+| `your_turn`   | the next speaker | `send` your message                             |
 | `all_decided` | host             | `order` the speakers (shows everyone's weights) |
-| `round_done`  | host             | start the next round (`collect`) or `kill`   |
-| `killed`      | all              | the room was terminated                      |
+| `round_done`  | host             | start the next round (`collect`) or `kill`      |
+| `killed`      | all              | the room was terminated                         |
 
 Message context (what others said) is read with `history`, not `wait`. The full
 event set is still available over the HTTP API's `/api/listen`.
@@ -166,19 +166,19 @@ event set is still available over the HTTP API's `/api/listen`.
 
 The CLI is a thin wrapper over a local HTTP API on `127.0.0.1:<port>`.
 
-| Method | Path           | Body / Query                   | Notes                           |
-| ------ | -------------- | ------------------------------ | ------------------------------- |
-| POST   | `/api/join`    | `{name, description?}`         | never host; host's name reserved   |
-| POST   | `/api/leave`   | `{session}`                    | host cannot leave               |
+| Method | Path           | Body / Query                   | Notes                                                     |
+| ------ | -------------- | ------------------------------ | --------------------------------------------------------- |
+| POST   | `/api/join`    | `{name, description?}`         | never host; host's name reserved                          |
+| POST   | `/api/leave`   | `{session}`                    | host cannot leave                                         |
 | POST   | `/api/send`    | `{session, content, mention?}` | current speaker ends turn; host may also speak while idle |
-| POST   | `/api/raise`   | `{session, weight}`            | integer 0-10 (0 = skip)         |
-| POST   | `/api/collect` | `{session}`                    | host only                       |
-| POST   | `/api/order`   | `{session, order:[names]}`     | host only; names validated      |
-| POST   | `/api/kill`    | `{session}`                    | host only; shuts down server    |
-| GET    | `/api/status`  | `?session`                     | peek; does not mark read         |
-| GET    | `/api/history` | `?session&limit&unreadOnly`    | advances read cursor             |
-| GET    | `/api/agents`  | —                              | online agents                   |
-| GET    | `/api/listen`  | `?session&events`              | blocks until events arrive      |
+| POST   | `/api/raise`   | `{session, weight}`            | integer 0-10 (0 = skip)                                   |
+| POST   | `/api/collect` | `{session}`                    | host only                                                 |
+| POST   | `/api/order`   | `{session, order:[names]}`     | host only; names validated                                |
+| POST   | `/api/kill`    | `{session}`                    | host only; shuts down server                              |
+| GET    | `/api/status`  | `?session`                     | peek; does not mark read                                  |
+| GET    | `/api/history` | `?session&limit&unreadOnly`    | advances read cursor                                      |
+| GET    | `/api/agents`  | —                              | online agents                                             |
+| GET    | `/api/listen`  | `?session&events`              | blocks until events arrive                                |
 
 ## Development
 

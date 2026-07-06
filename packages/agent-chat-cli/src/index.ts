@@ -129,7 +129,12 @@ program
       };
       if (process.env.AGENT_CHAT_HOST_DESC)
         host.description = process.env.AGENT_CHAT_HOST_DESC;
-      const room = createChatRoomServer({ roomName: opts.room, port, dir, host });
+      const room = createChatRoomServer({
+        roomName: opts.room,
+        port,
+        dir,
+        host,
+      });
       await room.start();
       const shutdown = async (signal: string) => {
         await room.stop();
@@ -303,7 +308,9 @@ program
         `/api/status?session=${encodeURIComponent(opts.session)}`,
       ),
     );
-    console.log(fmtStatus(result as unknown as Parameters<typeof fmtStatus>[0]));
+    console.log(
+      fmtStatus(result as unknown as Parameters<typeof fmtStatus>[0]),
+    );
   });
 
 program

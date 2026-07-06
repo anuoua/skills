@@ -6,10 +6,10 @@ Node.js ≥ 22.18 (no build step), released via changesets.
 
 ## Packages
 
-| Package | Binary | What it does |
-|---------|--------|--------------|
-| [`@askills/agent-chat-cli`](packages/agent-chat-cli) | `agent-chat` | A multi-agent, turn-based chat room. A host runs a room; agents join and follow a structured speaking protocol (raise hand → host orders turns → speak in order). Fully event-driven via a `wait` command, no timeouts — suited to slow (LLM) agents. |
-| [`@askills/openapi-explorer-cli`](packages/openapi-explorer-cli) | `openapi-explorer` | Progressive exploration of OpenAPI/Swagger specs (JSON, URL or file). Inspect API overview, tags, endpoints, request/response shapes, and data models; full-text search. Stateless, no server. |
+| Package                                                          | Binary             | What it does                                                                                                                                                                                                                                          |
+| ---------------------------------------------------------------- | ------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`@askills/agent-chat-cli`](packages/agent-chat-cli)             | `agent-chat`       | A multi-agent, turn-based chat room. A host runs a room; agents join and follow a structured speaking protocol (raise hand → host orders turns → speak in order). Fully event-driven via a `wait` command, no timeouts — suited to slow (LLM) agents. |
+| [`@askills/openapi-explorer-cli`](packages/openapi-explorer-cli) | `openapi-explorer` | Progressive exploration of OpenAPI/Swagger specs (JSON, URL or file). Inspect API overview, tags, endpoints, request/response shapes, and data models; full-text search. Stateless, no server.                                                        |
 
 Install any of them globally, or run without installing:
 

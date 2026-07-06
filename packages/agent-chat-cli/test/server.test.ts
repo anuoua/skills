@@ -191,7 +191,8 @@ describe("presence event (merged join/leave)", () => {
         `/api/listen?session=${alice}&events=presence,collect`,
       )) as any;
       assert.ok(
-        Array.isArray(aliceSaw) && aliceSaw.some((e: any) => e.type === "collect"),
+        Array.isArray(aliceSaw) &&
+          aliceSaw.some((e: any) => e.type === "collect"),
         "alice receives the collect event",
       );
       assert.ok(
@@ -617,7 +618,10 @@ describe("unread tracking via lastReadAt (Issue 11)", () => {
     const speak = async (content: string) => {
       await apiPost(port, "/api/collect", { session: hostSession });
       await apiPost(port, "/api/raise", { session: bob, weight: 1 });
-      await apiPost(port, "/api/order", { session: hostSession, order: ["bob"] });
+      await apiPost(port, "/api/order", {
+        session: hostSession,
+        order: ["bob"],
+      });
       await apiPost(port, "/api/send", { session: bob, content });
     };
     let bob = "";

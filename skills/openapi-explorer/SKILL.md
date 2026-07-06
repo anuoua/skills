@@ -127,15 +127,15 @@ openapi-explorer search ./spec.json "order"
 
 ## Decision guide — which command for which question
 
-| You want to… | Run |
-|--------------|-----|
-| Know what the API is / how big | `info` |
-| See how it's organized | `info` → `tags` |
-| List endpoints, maybe in one area | `paths [--tag <t>]` |
-| Know how to call a specific endpoint | `endpoint <src> <path> <method> --full` |
-| Find an endpoint by topic/name | `search "<query>"`, then `endpoint … --full` |
-| Understand a data model's fields | `schema <src> <Name>` |
-| Find where a field/topic appears | `search "<query>"` |
+| You want to…                         | Run                                          |
+| ------------------------------------ | -------------------------------------------- |
+| Know what the API is / how big       | `info`                                       |
+| See how it's organized               | `info` → `tags`                              |
+| List endpoints, maybe in one area    | `paths [--tag <t>]`                          |
+| Know how to call a specific endpoint | `endpoint <src> <path> <method> --full`      |
+| Find an endpoint by topic/name       | `search "<query>"`, then `endpoint … --full` |
+| Understand a data model's fields     | `schema <src> <Name>`                        |
+| Find where a field/topic appears     | `search "<query>"`                           |
 
 So a typical investigation is: **`search` to locate → `endpoint --full` (or
 `schema`) to see the detail.**
