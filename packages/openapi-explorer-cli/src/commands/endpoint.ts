@@ -106,7 +106,10 @@ export async function cmdEndpoint(
     operationId: op.operationId,
     tags: op.tags || [],
     deprecated: op.deprecated || false,
-    parameters: mergedParams.map((p: any) => ({ ...p, schema: resolve(p.schema) })),
+    parameters: mergedParams.map((p: any) => ({
+      ...p,
+      schema: resolve(p.schema),
+    })),
     requestBody,
     responses,
     security: op.security,

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { dispatch } from "./cli/dispatch.ts";
+import { dispatch } from "./cli/dispatch.js";
 
 async function main() {
   const output = await dispatch(process.argv);

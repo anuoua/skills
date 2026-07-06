@@ -11,13 +11,14 @@
     "directory": "packages/openapi-explorer-cli"
   },
   "bin": {
-    "openapi-explorer": "src/main.ts"
+    "openapi-explorer": "dist/index.mjs"
   },
   "scripts": {
     "start": "node src/main.ts",
     "test": "node --test test/*.test.ts",
     "test:watch": "node --test --watch test/*.test.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "build": "tsdown"
   },
   "engines": {
     "node": ">=22.18.0"
@@ -26,6 +27,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@types/node": "^22.10.0"
+    "@types/node": "^22.10.0",
+    "tsdown": "^0.22.3"
   }
 }
