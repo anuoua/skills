@@ -10,6 +10,9 @@
     "url": "git+https://github.com/anuoua/skills.git",
     "directory": "packages/openapi-explorer-cli"
   },
+  "files": [
+    "dist"
+  ],
   "bin": {
     "openapi-explorer": "dist/index.mjs"
   },

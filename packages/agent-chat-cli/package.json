@@ -10,6 +10,9 @@
     "url": "git+https://github.com/anuoua/skills.git",
     "directory": "packages/agent-chat-cli"
   },
+  "files": [
+    "dist"
+  ],
   "bin": {
     "agent-chat": "dist/index.mjs"
   },

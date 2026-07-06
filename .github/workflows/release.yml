@@ -31,6 +31,9 @@ jobs:
       - name: Typecheck
         run: pnpm -r --stream run typecheck
 
+      - name: Build
+        run: pnpm -r --stream run build
+
       - name: Test
         run: pnpm -r --stream run test
 
