@@ -1,5 +1,11 @@
 # @askills/openapi-explorer-cli
 
+## 0.0.4
+
+### Patch Changes
+
+- 5953a3b: change ci/cd and update package.json
+
 ## 0.0.3
 
 ### Patch Changes
