@@ -1,5 +1,11 @@
 # @askills/openapi-explorer-cli
 
+## 0.0.5
+
+### Patch Changes
+
+- 3a45772: some features update
+
 ## 0.0.4
 
 ### Patch Changes
