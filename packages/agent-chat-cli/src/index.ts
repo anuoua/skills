@@ -39,9 +39,14 @@ Quick reference:
   join    --file <room>.<port>.json --name <agent> [--description <text>]
 
   send    --session <id> --content <text> [--mention <agent>]
+  whisper --session <id> --to <names...> --content <text>   # host only; private
   raise   --session <id> --weight <n>
-  collect --session <id>
+  collect --session <id> [--participants <names...>]
   order   --session <id> --order <names...>
+  eliminate --session <id> --name <agent>
+  poll    --session <id> --question <text> --participants <names...>
+  vote    --session <id> --ballot <text>
+  reveal  --session <id>
   kill    --session <id>
   leave   --session <id>
   status  --session <id>
@@ -234,6 +239,24 @@ program
   });
 
 program
+  .command("whisper")
+  .description("Send a private one-shot message to agents (host only)")
+  .requiredOption("--session <id>", "Host session ID from join")
+  .requiredOption("--to <names...>", "Recipient agent names")
+  .requiredOption("--content <text>", "Message content")
+  .action(async (opts) => {
+    const port = resolvePortFromSession(opts.session);
+    const result = checkError(
+      await apiPost(port, "/api/whisper", {
+        session: opts.session,
+        content: opts.content,
+        to: opts.to,
+      }),
+    );
+    console.log(`Whispered [${result.messageId as string}]`);
+  });
+
+program
   .command("raise")
   .description("Raise hand with priority (integer 0-10, 0 = skip)")
   .requiredOption("--session <id>", "Session ID from join")
@@ -257,11 +280,15 @@ program
   .command("collect")
   .description("Collect hand raises (host only)")
   .requiredOption("--session <id>", "Host session ID from join")
+  .option(
+    "--participants <names...>",
+    "Restrict the round to these agents (scoped/private round)",
+  )
   .action(async (opts) => {
     const port = resolvePortFromSession(opts.session);
-    const result = checkError(
-      await apiPost(port, "/api/collect", { session: opts.session }),
-    );
+    const body: Record<string, unknown> = { session: opts.session };
+    if (opts.participants) body.participants = opts.participants;
+    const result = checkError(await apiPost(port, "/api/collect", body));
     console.log(
       fmtCollect({
         roundNumber: result.roundNumber as number,
@@ -284,6 +311,70 @@ program
       }),
     );
     console.log(fmtOrder(opts.order));
+  });
+
+program
+  .command("poll")
+  .description("Open a simultaneous ballot (host only)")
+  .requiredOption("--session <id>", "Host session ID from join")
+  .requiredOption("--question <text>", "What is being voted on")
+  .requiredOption("--participants <names...>", "Agents who may vote")
+  .action(async (opts) => {
+    const port = resolvePortFromSession(opts.session);
+    checkError(
+      await apiPost(port, "/api/poll", {
+        session: opts.session,
+        question: opts.question,
+        participants: opts.participants,
+      }),
+    );
+    console.log(`Poll opened: ${opts.question}`);
+  });
+
+program
+  .command("vote")
+  .description("Cast a private ballot in the current poll")
+  .requiredOption("--session <id>", "Session ID from join")
+  .requiredOption("--ballot <text>", "Your vote (kept private until reveal)")
+  .action(async (opts) => {
+    const port = resolvePortFromSession(opts.session);
+    checkError(
+      await apiPost(port, "/api/vote", {
+        session: opts.session,
+        ballot: opts.ballot,
+      }),
+    );
+    console.log("Vote cast (hidden until reveal)");
+  });
+
+program
+  .command("reveal")
+  .description(
+    "Reveal all ballots of the current poll as a public message (host only)",
+  )
+  .requiredOption("--session <id>", "Host session ID from join")
+  .action(async (opts) => {
+    const port = resolvePortFromSession(opts.session);
+    const result = checkError(
+      await apiPost(port, "/api/reveal", { session: opts.session }),
+    );
+    console.log(`Revealed [${result.messageId}]`);
+  });
+
+program
+  .command("eliminate")
+  .description("Retire an agent from all future rounds (host only)")
+  .requiredOption("--session <id>", "Host session ID from join")
+  .requiredOption("--name <agent>", "Agent name to eliminate")
+  .action(async (opts) => {
+    const port = resolvePortFromSession(opts.session);
+    checkError(
+      await apiPost(port, "/api/eliminate", {
+        session: opts.session,
+        name: opts.name,
+      }),
+    );
+    console.log(`Eliminated ${opts.name}`);
   });
 
 program
@@ -344,7 +435,7 @@ program
 program
   .command("wait")
   .description(
-    "Block until the room needs you to act, then print what to do and exit.\n\n  collect      -> raise your hand (or skip)\n  your_turn   -> send your message\n  all_decided -> (host) set the speaking order\n  round_done  -> (host) start the next round or kill\n  presence    -> an agent joined or left (context)\n  killed       -> room terminated\n\nRe-run after each event. Message context is read with `history`.",
+    "Block until the room needs you to act, then print what to do and exit.\n\n  collect      -> raise your hand (or skip)\n  your_turn   -> send your message\n  all_decided -> (host) set the speaking order\n  round_done  -> (host) start the next round or kill\n  vote_open   -> cast your private ballot\n  all_voted   -> (host) reveal the ballots\n  vote_result -> the tally was published (see history)\n  whisper     -> private message from host (see history)\n  presence    -> an agent joined or left (context)\n  killed       -> room terminated\n\nRe-run after each event. Message context is read with `history`.",
   )
   .requiredOption("--session <id>", "Session ID from join")
   .action(async (opts) => {
@@ -353,7 +444,7 @@ program
     params.set("session", opts.session);
     params.set(
       "events",
-      "presence,collect,your_turn,all_decided,round_done,killed",
+      "presence,collect,your_turn,all_decided,round_done,vote_open,all_voted,vote_result,whisper,killed",
     );
     const result = checkError(
       await apiGet(port, `/api/listen?${params.toString()}`),

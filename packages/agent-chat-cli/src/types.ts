@@ -5,6 +5,8 @@ export interface Message {
   timestamp: number;
   type: "message" | "system";
   mention?: string;
+  /** When set, only these agents (and the host) may read this message. */
+  visibleTo?: string[];
 }
 
 export interface AgentState {
@@ -30,6 +32,10 @@ export interface RoundState {
   currentSpeakerIndex: number;
   decidedAgentNames: string[];
   excludedAgentNames: string[];
+  /** Permanently retired by the host (eliminate). Stays online to spectate. */
+  eliminatedAgentNames: string[];
+  /** Non-null ⇒ scoped round: only these agents (plus host) may participate. */
+  participants: string[] | null;
 }
 
 export interface ServerConfig {
@@ -39,4 +45,13 @@ export interface ServerConfig {
   dir: string;
   /** Host established at serve time (skips a separate join). */
   host?: { name: string; description?: string; session: string };
+}
+
+/** State for the simultaneous ballot mini-protocol (poll → vote → reveal). */
+export interface VoteState {
+  active: boolean;
+  question: string;
+  participants: string[];
+  ballots: Record<string, string>;
+  decided: string[];
 }

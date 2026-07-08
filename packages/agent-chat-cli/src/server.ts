@@ -8,6 +8,7 @@ import type {
   ChatEvent,
   RoundState,
   ServerConfig,
+  VoteState,
 } from "./types.ts";
 import { roomFileName } from "./room.ts";
 
@@ -39,6 +40,16 @@ export function createChatRoomServer(config: ServerConfig) {
     currentSpeakerIndex: -1,
     decidedAgentNames: [],
     excludedAgentNames: [],
+    eliminatedAgentNames: [],
+    participants: null,
+  };
+
+  const voteState: VoteState = {
+    active: false,
+    question: "",
+    participants: [],
+    ballots: {},
+    decided: [],
   };
 
   function ensureQueue(name: string): ChatEvent[] {
@@ -115,6 +126,7 @@ export function createChatRoomServer(config: ServerConfig) {
     content: string,
     type: "message" | "system",
     mention?: string,
+    visibleTo?: string[],
   ): Message {
     const msg: Message = {
       id: randomUUID().slice(0, 8),
@@ -126,19 +138,35 @@ export function createChatRoomServer(config: ServerConfig) {
     if (mention !== undefined) {
       msg.mention = mention;
     }
+    if (visibleTo !== undefined) {
+      msg.visibleTo = visibleTo;
+    }
     messages.push(msg);
     persistMessages();
     return msg;
   }
 
-  /** Push a message event to everyone (and a mention event to the @target). */
+  /** Push a message event to viewers who can see it (and a mention to @target). */
   function broadcastMessage(msg: Message, from: string, mention?: string) {
-    enqueueEvent({
-      type: "message",
-      data: { message: msg },
-      timestamp: Date.now(),
-    });
-    if (mention && agents.has(mention)) {
+    if (msg.visibleTo) {
+      const hostName = getHost()?.name;
+      const viewers = new Set<string>(msg.visibleTo);
+      if (hostName) viewers.add(hostName);
+      for (const name of viewers) {
+        if (agents.get(name)?.online)
+          enqueueEvent(
+            { type: "message", data: { message: msg }, timestamp: Date.now() },
+            name,
+          );
+      }
+    } else {
+      enqueueEvent({
+        type: "message",
+        data: { message: msg },
+        timestamp: Date.now(),
+      });
+    }
+    if (mention && agents.has(mention) && canSee(msg, mention)) {
       enqueueEvent(
         {
           type: "mention",
@@ -159,7 +187,7 @@ export function createChatRoomServer(config: ServerConfig) {
     limit: number | undefined,
     unreadOnly: boolean,
   ): Message[] {
-    let msgs = messages;
+    let msgs = messages.filter((m) => canSee(m, name));
     const agent = agents.get(name);
     if (unreadOnly && agent) {
       msgs = msgs.filter((m) => m.timestamp > unreadSince(agent));
@@ -181,6 +209,7 @@ export function createChatRoomServer(config: ServerConfig) {
       if (
         state.online &&
         !roundState.excludedAgentNames.includes(name) &&
+        !roundState.eliminatedAgentNames.includes(name) &&
         !state.isHost
       ) {
         names.push(name);
@@ -194,12 +223,60 @@ export function createChatRoomServer(config: ServerConfig) {
     if (!agent) return false;
     if (!agent.online) return false;
     if (roundState.excludedAgentNames.includes(name)) return false;
+    if (roundState.eliminatedAgentNames.includes(name)) return false;
     return true;
+  }
+
+  /** May `name` take part in the current round? Respects scope + retirement. */
+  function canParticipate(name: string): boolean {
+    const agent = agents.get(name);
+    if (!agent || !agent.online) return false;
+    if (roundState.excludedAgentNames.includes(name)) return false;
+    if (roundState.eliminatedAgentNames.includes(name)) return false;
+    if (agent.isHost) return true; // host joins scope implicitly, speaks via order
+    if (roundState.participants === null) return true; // public round
+    return roundState.participants.includes(name);
+  }
+
+  /** May `viewerName` read `msg`? Public msg → all; scoped → participants/host/speaker. */
+  function canSee(msg: Message, viewerName: string): boolean {
+    if (!msg.visibleTo) return true;
+    if (msg.speaker === viewerName) return true;
+    const viewer = agents.get(viewerName);
+    if (viewer?.isHost) return true;
+    return msg.visibleTo.includes(viewerName);
+  }
+
+  /**
+   * Validate a host-supplied participant list (for scoped rounds and polls).
+   * Returns the validated names, or throws an error message.
+   */
+  function validateParticipants(list: unknown): string[] {
+    if (!Array.isArray(list) || list.length === 0) {
+      throw new Error("participants cannot be empty");
+    }
+    for (const n of list) {
+      if (typeof n !== "string") {
+        throw new Error("participants must contain strings");
+      }
+      const a = agents.get(n);
+      if (!a) throw new Error(`Agent '${n}' is not in the room`);
+      if (a.isHost)
+        throw new Error(
+          "Host is implicitly in scope; do not list it in participants",
+        );
+      if (!isEligibleSpeaker(n))
+        throw new Error(`Agent '${n}' is not available to participate`);
+    }
+    return list;
   }
 
   function checkAllDecided() {
     if (roundState.phase !== "collecting") return;
-    const participating = getParticipatingAgents();
+    const participating =
+      roundState.participants !== null
+        ? roundState.participants.filter((n) => canParticipate(n))
+        : getParticipatingAgents();
     const allDecided = participating.every((name) =>
       roundState.decidedAgentNames.includes(name),
     );
@@ -215,6 +292,27 @@ export function createChatRoomServer(config: ServerConfig) {
       };
       const host = getHost();
       if (host) enqueueEvent(event, host.name);
+    }
+  }
+
+  function checkAllVoted() {
+    if (!voteState.active) return;
+    const voters = voteState.participants.filter((n) => canParticipate(n));
+    const allVoted = voters.every((n) => voteState.decided.includes(n));
+    if (allVoted) {
+      const host = getHost();
+      if (host)
+        enqueueEvent(
+          {
+            type: "all_voted",
+            data: {
+              question: voteState.question,
+              count: voters.length,
+            },
+            timestamp: Date.now(),
+          },
+          host.name,
+        );
     }
   }
 
@@ -254,6 +352,7 @@ export function createChatRoomServer(config: ServerConfig) {
     roundState.weights = {};
     roundState.order = [];
     roundState.currentSpeakerIndex = -1;
+    roundState.participants = null;
     roundState.roundNumber++;
     const host = getHost();
     if (host)
@@ -384,6 +483,103 @@ export function createChatRoomServer(config: ServerConfig) {
     res.json({ ok: true });
   });
 
+  app.post("/api/eliminate", (req, res) => {
+    if (!requireHostBySession(req.body?.session, res)) return;
+    const { name } = req.body ?? {};
+    if (!name || typeof name !== "string") {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const agent = agents.get(name);
+    if (!agent) {
+      res.status(404).json({ error: "Agent not found" });
+      return;
+    }
+    if (agent.isHost) {
+      res.status(400).json({ error: "Cannot eliminate the host" });
+      return;
+    }
+    if (roundState.eliminatedAgentNames.includes(name)) {
+      res.status(400).json({ error: "Agent already eliminated" });
+      return;
+    }
+
+    // Unlike `leave`, eliminate keeps the agent online (so they may still
+    // spectate via status/history) but drops them from all future rounds.
+    roundState.eliminatedAgentNames.push(name);
+    enqueueEvent(
+      {
+        type: "eliminated",
+        data: { agentName: name },
+        timestamp: Date.now(),
+      },
+      name,
+    );
+    const elimHost = getHost();
+    if (elimHost)
+      enqueueEvent(
+        {
+          type: "presence",
+          data: { agentName: name, kind: "eliminated" },
+          timestamp: Date.now(),
+        },
+        elimHost.name,
+      );
+    checkAllDecided();
+    checkAllVoted();
+    if (
+      roundState.phase === "speaking" &&
+      roundState.order[roundState.currentSpeakerIndex] === name
+    )
+      advanceSpeaker();
+    res.json({ ok: true });
+  });
+
+  app.post("/api/whisper", (req, res) => {
+    if (!requireHostBySession(req.body?.session, res)) return;
+    const { content, to } = req.body ?? {};
+
+    if (
+      !Array.isArray(to) ||
+      to.length === 0 ||
+      !to.every((n) => typeof n === "string")
+    ) {
+      res
+        .status(400)
+        .json({ error: "to must be a non-empty array of agent names" });
+      return;
+    }
+    if (typeof content !== "string" || content.trim() === "") {
+      res.status(400).json({ error: "content is required" });
+      return;
+    }
+    for (const name of to) {
+      const a = agents.get(name);
+      if (!a || !a.online) {
+        res.status(400).json({ error: `Agent '${name}' is not online` });
+        return;
+      }
+    }
+
+    const host = getHost();
+    const hostName = host?.name ?? "host";
+    const msg = addMessage(hostName, content, "message", undefined, to);
+    broadcastMessage(msg, hostName);
+    // a sender's own message is not unread to it (parity with /api/send)
+    if (host) host.lastReadAt = msg.timestamp;
+    for (const name of to) {
+      enqueueEvent(
+        {
+          type: "whisper",
+          data: { from: hostName, message: msg },
+          timestamp: Date.now(),
+        },
+        name,
+      );
+    }
+    res.json({ ok: true, messageId: msg.id });
+  });
+
   app.post("/api/send", (req, res) => {
     const name = resolveSession(req.body?.session);
     if (!name) {
@@ -417,7 +613,13 @@ export function createChatRoomServer(config: ServerConfig) {
       }
     }
 
-    const msg = addMessage(name, content, "message", mention);
+    const msg = addMessage(
+      name,
+      content,
+      "message",
+      mention,
+      roundState.participants ?? undefined,
+    );
     // A sender has already seen their own message — advance their read cursor
     // past it so it doesn't show as unread to them.
     agent.lastReadAt = msg.timestamp;
@@ -439,6 +641,10 @@ export function createChatRoomServer(config: ServerConfig) {
     }
     if (agent.isHost) {
       res.status(400).json({ error: "Host does not raise" });
+      return;
+    }
+    if (!canParticipate(name)) {
+      res.status(400).json({ error: "Not a participant in this round" });
       return;
     }
     if (roundState.phase !== "collecting") {
@@ -476,6 +682,24 @@ export function createChatRoomServer(config: ServerConfig) {
       res.status(400).json({ error: "Round already in progress" });
       return;
     }
+    if (voteState.active) {
+      res.status(400).json({ error: "A poll is in progress; reveal first" });
+      return;
+    }
+
+    // Validate an optional participant scope BEFORE mutating any state.
+    const requested = req.body?.participants;
+    let scoped: string[] | null;
+    if (requested !== undefined) {
+      try {
+        scoped = validateParticipants(requested);
+      } catch (e) {
+        res.status(400).json({ error: (e as Error).message });
+        return;
+      }
+    } else {
+      scoped = null;
+    }
 
     roundState.phase = "collecting";
     roundState.decidedAgentNames = [];
@@ -487,7 +711,8 @@ export function createChatRoomServer(config: ServerConfig) {
       },
     );
 
-    const participating = getParticipatingAgents();
+    const participating = scoped !== null ? scoped : getParticipatingAgents();
+    roundState.participants = scoped;
     if (participating.length === 0) {
       roundState.phase = "idle";
       res.status(400).json({ error: "No participating agents" });
@@ -498,7 +723,10 @@ export function createChatRoomServer(config: ServerConfig) {
       enqueueEvent(
         {
           type: "collect",
-          data: { roundNumber: roundState.roundNumber },
+          data: {
+            roundNumber: roundState.roundNumber,
+            participants: [...participating],
+          },
           timestamp: Date.now(),
         },
         name,
@@ -510,6 +738,120 @@ export function createChatRoomServer(config: ServerConfig) {
       roundNumber: roundState.roundNumber,
       participants: participating,
     });
+  });
+
+  // --- poll / vote / reveal: simultaneous ballot mini-protocol -------------
+  // Ballots are stored privately server-side; `reveal` publishes them all at
+  // once as a single public system message so no voter sees earlier choices.
+
+  app.post("/api/poll", (req, res) => {
+    if (!requireHostBySession(req.body?.session, res)) return;
+    if (roundState.phase !== "idle") {
+      res.status(400).json({ error: "Round in progress" });
+      return;
+    }
+    if (voteState.active) {
+      res.status(400).json({ error: "A poll is already in progress" });
+      return;
+    }
+    const question = req.body?.question;
+    if (typeof question !== "string" || question.trim() === "") {
+      res.status(400).json({ error: "question is required" });
+      return;
+    }
+    let participants: string[];
+    try {
+      participants = validateParticipants(req.body?.participants);
+    } catch (e) {
+      res.status(400).json({ error: (e as Error).message });
+      return;
+    }
+
+    voteState.active = true;
+    voteState.question = question;
+    voteState.participants = participants;
+    voteState.ballots = {};
+    voteState.decided = [];
+
+    for (const name of participants) {
+      enqueueEvent(
+        {
+          type: "vote_open",
+          data: { question, participants: [...participants] },
+          timestamp: Date.now(),
+        },
+        name,
+      );
+    }
+    res.json({ ok: true, question, participants });
+  });
+
+  app.post("/api/vote", (req, res) => {
+    const name = resolveSession(req.body?.session);
+    if (!name) {
+      res.status(401).json({ error: "Invalid session" });
+      return;
+    }
+    if (!voteState.active) {
+      res.status(400).json({ error: "No active poll" });
+      return;
+    }
+    const agent = agents.get(name);
+    if (!agent || !agent.online) {
+      res.status(403).json({ error: "Agent is offline" });
+      return;
+    }
+    if (agent.isHost) {
+      res.status(400).json({ error: "Host does not vote" });
+      return;
+    }
+    if (!voteState.participants.includes(name)) {
+      res.status(400).json({ error: "Not a voter in this poll" });
+      return;
+    }
+    if (voteState.decided.includes(name)) {
+      res.status(400).json({ error: "Already voted" });
+      return;
+    }
+    const ballot = req.body?.ballot;
+    if (typeof ballot !== "string" || ballot.trim() === "") {
+      res.status(400).json({ error: "ballot is required" });
+      return;
+    }
+
+    voteState.ballots[name] = ballot;
+    voteState.decided.push(name);
+    checkAllVoted();
+    res.json({ ok: true });
+  });
+
+  app.post("/api/reveal", (req, res) => {
+    if (!requireHostBySession(req.body?.session, res)) return;
+    if (!voteState.active) {
+      res.status(400).json({ error: "No active poll" });
+      return;
+    }
+
+    const question = voteState.question;
+    const tally = voteState.participants
+      .filter((n) => voteState.decided.includes(n))
+      .map((n) => `${n} → ${voteState.ballots[n]}`)
+      .join("\n");
+    const content = `投票: ${question}\n${tally}`;
+    const msg = addMessage(getHost()?.name ?? "host", content, "system");
+    broadcastMessage(msg, msg.speaker);
+    enqueueEvent({
+      type: "vote_result",
+      data: { question, messageId: msg.id },
+      timestamp: Date.now(),
+    });
+
+    voteState.active = false;
+    voteState.question = "";
+    voteState.participants = [];
+    voteState.ballots = {};
+    voteState.decided = [];
+    res.json({ ok: true, messageId: msg.id });
   });
 
   app.post("/api/order", (req, res) => {
@@ -530,7 +872,7 @@ export function createChatRoomServer(config: ServerConfig) {
         res.status(400).json({ error: "order must contain strings" });
         return;
       }
-      if (!isEligibleSpeaker(n)) {
+      if (!canParticipate(n)) {
         res
           .status(400)
           .json({ error: `Agent '${n}' is not available to speak` });
@@ -567,10 +909,12 @@ export function createChatRoomServer(config: ServerConfig) {
       return;
     }
 
-    const msgs = messages;
     const agent = agents.get(name);
     const since = agent ? unreadSince(agent) : 0;
-    const unreadMsgs = agent ? msgs.filter((m) => m.timestamp > since) : [];
+    const visibleMsgs = agent ? messages.filter((m) => canSee(m, name)) : [];
+    const unreadMsgs = agent
+      ? visibleMsgs.filter((m) => m.timestamp > since)
+      : [];
     const myMentions = unreadMsgs.filter((m) => m.mention === name);
 
     // status is a pure peek — it reports unread state but does NOT advance the
