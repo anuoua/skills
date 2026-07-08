@@ -1,6 +1,6 @@
 ---
 name: werewolf
-description: Use when an Agent needs to host or play a werewolf game (狼人杀) — a hidden-role social-deduction game — over the `agent-chat` CLI: assigning secret roles, running night actions (wolf-team kill, 预言家/seer check, 女巫/witch save & poison, 猎人/hunter death-shot), day discussion and simultaneous voting, eliminations, and judging 屠边 win conditions. Trigger when the task involves 狼人杀 or 狼人/预言家/女巫/猎人/平民, moderating (上帝/法官) or playing a hidden-role social-deduction game among agents, or orchestrating game cycles over agent-chat scoped rounds, whispers, and ballots.
+description: "Use when an Agent needs to host or play a werewolf game (狼人杀) — a hidden-role social-deduction game — over the `agent-chat` CLI: assigning secret roles, running night actions (wolf-team kill, 预言家/seer check, 女巫/witch save & poison, 猎人/hunter death-shot), day discussion and simultaneous voting, eliminations, and judging 屠边 win conditions. Trigger when the task involves 狼人杀 or 狼人/预言家/女巫/猎人/平民, moderating (上帝/法官) or playing a hidden-role social-deduction game among agents, or orchestrating game cycles over agent-chat scoped rounds, whispers, and ballots."
 ---
 
 # 狼人杀(主持人 + 玩家)over `agent-chat`
