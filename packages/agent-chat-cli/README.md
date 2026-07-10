@@ -103,6 +103,8 @@ host's name is rejected.
 ```bash
 agent-chat raise    --session <id> --weight <n>      # 0 = skip, 1-10 priority
 agent-chat send     --session <id> --content <text> [--mention <agent>]
+agent-chat whisper  --session <id> --to <names...> --content <text>   # host only; private
+agent-chat vote     --session <id> --ballot <text>   # cast a private ballot
 agent-chat leave    --session <id>                   # participants only
 ```
 
@@ -123,14 +125,21 @@ their own pace, which suits slow (LLM) agents.
 ### Host-only
 
 ```bash
-agent-chat collect  --session <id>                   # start a round
-agent-chat order    --session <id> --order <names...> # set speaking order
-agent-chat kill     --session <id>                   # terminate the room
+agent-chat collect  --session <id> [--participants <names...>]  # start a round
+agent-chat order    --session <id> --order <names...>           # set speaking order
+agent-chat eliminate --session <id> --name <agent>              # retire an agent
+agent-chat poll     --session <id> --question <text> --participants <names...>  # open a vote
+agent-chat reveal   --session <id>                              # publish all ballots
+agent-chat kill     --session <id>                              # terminate the room
 ```
 
-`collect` opens the raise phase; `order` accepts any online agent (the host
-may include itself). `kill` terminates the server and
-removes the discovery marker.
+`collect` opens the raise phase. With `--participants` it opens a **scoped
+(private) round**: only those agents may raise/speak, and the round's messages
+are visible only to them and the host (see _Scoped rounds & ballots_). `order`
+accepts any agent who can participate in the current round (the host may include
+itself). `eliminate` permanently retires an agent from all future rounds while
+keeping it online to spectate. `poll` / `reveal` run a simultaneous ballot.
+`kill` terminates the server and removes the discovery marker.
 
 ### Queries
 
@@ -150,35 +159,77 @@ advances your read cursor, so `unreadCount` reflects messages since your last
 (with your session filled in), then exits — re-run it after each action. It
 listens only for the actionable events:
 
-| Event         | Who              | `wait` tells you to…                            |
-| ------------- | ---------------- | ----------------------------------------------- |
-| `presence`    | host             | an agent joined (`+`) or left (`-`) — context   |
-| `collect`     | participants     | `raise` (weight 0 = skip, 1-10 = priority)      |
-| `your_turn`   | the next speaker | `send` your message                             |
-| `all_decided` | host             | `order` the speakers (shows everyone's weights) |
-| `round_done`  | host             | start the next round (`collect`) or `kill`      |
-| `killed`      | all              | the room was terminated                         |
+| Event         | Who              | `wait` tells you to…                                           |
+| ------------- | ---------------- | -------------------------------------------------------------- |
+| `presence`    | host             | an agent joined (`+`), left (`-`), or was eliminated — context |
+| `collect`     | participants     | `raise` (weight 0 = skip, 1-10 = priority)                     |
+| `your_turn`   | the next speaker | `send` your message                                            |
+| `all_decided` | host             | `order` the speakers (shows everyone's weights)                |
+| `round_done`  | host             | start the next round (`collect`) or `kill`                     |
+| `vote_open`   | voters           | `vote` your private ballot                                     |
+| `all_voted`   | host             | `reveal` the ballots                                           |
+| `vote_result` | all              | the tally was published (see `history`)                        |
+| `killed`      | all              | the room was terminated                                        |
 
 Message context (what others said) is read with `history`, not `wait`. The full
 event set is still available over the HTTP API's `/api/listen`.
+
+## Scoped rounds & ballots
+
+Three host tools make the room suitable for hidden-role games (e.g. werewolf)
+and any workflow needing private breakout discussions:
+
+- **Scoped rounds** — `collect --participants <names...>` opens a round limited
+  to those agents. Only they can `raise`/`send`, and the round's messages are
+  visible **only** to them and the host (`history`/`status` filter by viewer).
+  Omit `--participants` for a normal public round. The host joins a scoped
+  round's scope implicitly and may speak by including itself in `order` — useful
+  for narrating a private result (e.g. a seer's check) back to the participant.
+- **Eliminate** — `eliminate --name <agent>` permanently retires an agent from
+  all future rounds. Unlike `leave`, the agent stays online so it can spectate
+  via `status`/`history`, but it can no longer raise, be ordered, or vote. The
+  agent receives an `eliminated` event; the host a `presence`/`eliminated` event.
+- **Poll / vote / reveal** — `poll --question <text> --participants <names...>`
+  opens a simultaneous ballot. Each voter casts a private `vote --ballot <text>`
+  (ballots are stored server-side and never sent to other agents). When everyone
+  has voted the host gets `all_voted`; `reveal` then publishes **all** ballots at
+  once as a single public system message, so no voter sees earlier choices. This
+  is the "show of hands" the speaking protocol doesn't provide.
+- **Whisper** — `whisper --to <names...> --content <text>` is the lightweight
+  one-shot private channel: the host sends a single private message to one or
+  more agents at any time (idle or mid-round), without the collect→raise→order
+  ceremony. Recipients get a dedicated `whisper` event and read the content via
+  `history`; non-recipients see nothing. Use scoped rounds for multi-party
+  private discussion and `whisper` for a single private remark (e.g. telling a
+  player their role).
+
+A poll and a speaking round are mutually exclusive: both require the room to be
+idle. Scoped round messages are still persisted to the room file (which is a
+host-visible artifact); agents going through the API only see what their scope
+permits.
 
 ## HTTP API
 
 The CLI is a thin wrapper over a local HTTP API on `127.0.0.1:<port>`.
 
-| Method | Path           | Body / Query                   | Notes                                                     |
-| ------ | -------------- | ------------------------------ | --------------------------------------------------------- |
-| POST   | `/api/join`    | `{name, description?}`         | never host; host's name reserved                          |
-| POST   | `/api/leave`   | `{session}`                    | host cannot leave                                         |
-| POST   | `/api/send`    | `{session, content, mention?}` | current speaker ends turn; host may also speak while idle |
-| POST   | `/api/raise`   | `{session, weight}`            | integer 0-10 (0 = skip)                                   |
-| POST   | `/api/collect` | `{session}`                    | host only                                                 |
-| POST   | `/api/order`   | `{session, order:[names]}`     | host only; names validated                                |
-| POST   | `/api/kill`    | `{session}`                    | host only; shuts down server                              |
-| GET    | `/api/status`  | `?session`                     | peek; does not mark read                                  |
-| GET    | `/api/history` | `?session&limit&unreadOnly`    | advances read cursor                                      |
-| GET    | `/api/agents`  | —                              | online agents                                             |
-| GET    | `/api/listen`  | `?session&events`              | blocks until events arrive                                |
+| Method | Path             | Body / Query                                | Notes                                                     |
+| ------ | ---------------- | ------------------------------------------- | --------------------------------------------------------- |
+| POST   | `/api/join`      | `{name, description?}`                      | never host; host's name reserved                          |
+| POST   | `/api/leave`     | `{session}`                                 | host cannot leave                                         |
+| POST   | `/api/send`      | `{session, content, mention?}`              | current speaker ends turn; host may also speak while idle |
+| POST   | `/api/raise`     | `{session, weight}`                         | integer 0-10 (0 = skip)                                   |
+| POST   | `/api/collect`   | `{session, participants?}`                  | host only; `participants` ⇒ scoped round                  |
+| POST   | `/api/order`     | `{session, order:[names]}`                  | host only; names validated                                |
+| POST   | `/api/eliminate` | `{session, name}`                           | host only; retires agent from future rounds               |
+| POST   | `/api/whisper`   | `{session, content, to:[names]}`            | host only; private message to listed agents               |
+| POST   | `/api/poll`      | `{session, question, participants:[names]}` | host only; opens a simultaneous ballot                    |
+| POST   | `/api/vote`      | `{session, ballot}`                         | voter only; ballot kept private until reveal              |
+| POST   | `/api/reveal`    | `{session}`                                 | host only; publishes all ballots as a public message      |
+| POST   | `/api/kill`      | `{session}`                                 | host only; shuts down server                              |
+| GET    | `/api/status`    | `?session`                                  | peek; does not mark read                                  |
+| GET    | `/api/history`   | `?session&limit&unreadOnly`                 | advances read cursor; respects message scope              |
+| GET    | `/api/agents`    | —                                           | online agents                                             |
+| GET    | `/api/listen`    | `?session&events`                           | blocks until events arrive                                |
 
 ## Development
 

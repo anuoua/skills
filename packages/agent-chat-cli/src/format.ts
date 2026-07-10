@@ -123,8 +123,16 @@ export function fmtEvent(ev: ChatEvent): string {
       return fmtMessage(d.message as Message);
     case "mention":
       return `[${t}] @you mentioned by ${d.from}:\n${indent((d.message as Message)?.content ?? "")}`;
-    case "collect":
-      return `[${t}] collect  (round ${d.roundNumber})`;
+    case "whisper":
+      return `[${t}] whisper from ${d.from}:\n${indent((d.message as Message)?.content ?? "")}`;
+    case "collect": {
+      const participants = d.participants as string[] | undefined;
+      const scope =
+        participants && participants.length > 0
+          ? ` (private: ${participants.join(", ")})`
+          : "";
+      return `[${t}] collect  (round ${d.roundNumber})${scope}`;
+    }
     case "your_turn":
       return `[${t}] your_turn  (round ${d.roundNumber})`;
     case "all_decided": {
@@ -138,6 +146,12 @@ export function fmtEvent(ev: ChatEvent): string {
     }
     case "round_done":
       return `[${t}] round_done  (round ${d.roundNumber} finished)`;
+    case "vote_open":
+      return `[${t}] vote_open  ${d.question}`;
+    case "all_voted":
+      return `[${t}] all_voted  (count ${d.count})`;
+    case "vote_result":
+      return `[${t}] vote_result  (see history)`;
     case "presence":
       return `[${t}] ${d.kind === "left" ? "-" : "+"} ${d.agentName} ${d.kind}`;
     case "killed":
@@ -159,12 +173,18 @@ export function fmtEvents(events: ChatEvent[]): string {
 export function fmtWaitPrompt(ev: ChatEvent, session: string): string {
   const d = ev.data as Record<string, unknown>;
   switch (ev.type) {
-    case "collect":
+    case "collect": {
+      const participants = d.participants as string[] | undefined;
+      const scope =
+        participants && participants.length > 0
+          ? `\n  Private round with: ${participants.join(", ")}`
+          : "";
       return [
-        `Round ${d.roundNumber} opened — raise your hand or skip.`,
+        `Round ${d.roundNumber} opened — raise your hand or skip.${scope}`,
         `  Run: agent-chat raise --session ${session} --weight <n>`,
         `  (0 = skip this round; 1-10 = speaking priority)`,
       ].join("\n");
+    }
     case "your_turn":
       return [
         `Your turn to speak (round ${d.roundNumber}).`,
@@ -190,6 +210,25 @@ export function fmtWaitPrompt(ev: ChatEvent, session: string): string {
         `  Next: agent-chat collect --session ${session}`,
         `  Or:   agent-chat kill --session ${session}`,
       ].join("\n");
+    case "vote_open":
+      return [
+        `Vote opened: ${d.question}`,
+        `  Run: agent-chat vote --session ${session} --ballot <text>`,
+        `  (your ballot is private until reveal)`,
+      ].join("\n");
+    case "all_voted":
+      return [
+        `All voters have cast ballots.`,
+        `  Run: agent-chat reveal --session ${session}`,
+      ].join("\n");
+    case "vote_result":
+      return `Votes revealed — see \`history\` for the tally.`;
+    case "whisper": {
+      const from = String(d.from ?? "");
+      return [
+        `Private whisper from ${from} — read with: agent-chat history --session ${session} --unread-only`,
+      ].join("\n");
+    }
     case "presence":
       return `[${fmtTime(ev.timestamp)}] ${d.kind === "left" ? "-" : "+"} ${d.agentName} ${d.kind}`;
     case "killed":
